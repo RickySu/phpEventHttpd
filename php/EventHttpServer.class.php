@@ -216,8 +216,10 @@ abstract class EventHttpServer {
         $Event=$this->ClientData[$SocketName]['Event'];
         $ClientSocket=$this->ClientData[$SocketName]['Socket'];
         event_buffer_free($Event);
-        if($SendFin) fwrite($ClientSocket,$this->ChunkDataFin);
-        fwrite($ClientSocket,"0\r\n\r\n");
+        if($SendFin) {
+            fwrite($ClientSocket,$this->ChunkDataFin);
+            fwrite($ClientSocket,"0\r\n\r\n");
+        }
         $this->ClientQueueRemove($SocketName);
         @stream_socket_shutdown($ClientSocket,STREAM_SHUT_RDWR);
         @fclose($ClientSocket);
@@ -282,15 +284,15 @@ abstract class EventHttpServer {
                 }
                 break;
             default:
-                $this->ClientShutDown($SocketName);
+                $this->ClientShutDown($SocketName,false);
                 return;
         }
         echo "output file\n";
         $this->OutputFile($BufferEvent,$SocketName);
     }
-    private function MimeInfo($File){
+    private function MimeInfo($File) {
         $Info = pathinfo($File);
-        switch(strtolower($Info['basename'])){
+        switch(strtolower($Info['basename'])) {
             case 'html':
             case 'htm':
                 return 'text/html';
@@ -310,22 +312,22 @@ abstract class EventHttpServer {
                 return 'application/x-shockwave-flash';
         }
     }
-    public function OutputFile($BufferEvent,$SocketName){
+    public function OutputFile($BufferEvent,$SocketName) {
         $Request=$this->HttpHeaders['_Request_'];
         $File=preg_replace('/\.{2,}/','',substr($Request['File'],1));
         $File=getcwd().'/'.$this->Config['BaseDir']."/$File";
         if(!file_exists($File))
-         return $this->Send404Error($BufferEvent,$SocketName);
+            return $this->Send404Error($BufferEvent,$SocketName);
         $Data="HTTP/1.1 200\r\n"
-             ."Content-Type: ".$this->MimeInfo($File)."\r\n"
-             ."Connection: close\r\n"
-             ."Content-Length: ".filesize($File)."\r\n\r\n";
+                ."Content-Type: ".$this->MimeInfo($File)."\r\n"
+                ."Connection: close\r\n"
+                ."Content-Length: ".filesize($File)."\r\n\r\n";
         echo $Data;
         event_buffer_write($BufferEvent,$Data);
         $hFile=fopen($File,'r');
-        while(!feof($hFile)){
-          $Data=fread($hFile,4096);
-          event_buffer_write($BufferEvent,$Data);  
+        while(!feof($hFile)) {
+            $Data=fread($hFile,4096);
+            event_buffer_write($BufferEvent,$Data);
         }
         fclose($hFile);
         $this->ClientData[$SocketName]['DataFin']=true;
@@ -337,18 +339,18 @@ abstract class EventHttpServer {
             $this->ClientShutDown($SocketName);
             return;
         }
-        if($this->ClientData[$SocketName]['DataFin']){
+        if($this->ClientData[$SocketName]['DataFin']) {
             event_buffer_free($BufferEvent);
             $this->ClientShutDown($SocketName,false);
             return;
         }
     }
-    private function Send404Error($BufferEvent,$SocketName){
+    private function Send404Error($BufferEvent,$SocketName) {
         $Message="File not found!";
         $Data="HTTP/1.0 404 Not Found\r\n"
-             ."Content-Type: text/plain; charset=UTF-8\r\n"
-             ."Connection: close\r\n"
-             ."Content-Length: ".strlen($Message)."\r\n\r\n$Message";
+                ."Content-Type: text/plain; charset=UTF-8\r\n"
+                ."Connection: close\r\n"
+                ."Content-Length: ".strlen($Message)."\r\n\r\n$Message";
         event_buffer_write($BufferEvent,$Data);
         $this->ClientData[$SocketName]['DataFin']=true;
         return true;
