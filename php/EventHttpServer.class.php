@@ -124,7 +124,7 @@ abstract class EventHttpServer {
         /*if($this->Config['ClientSocketTTL']>0)
             pcntl_alarm($this->Config['ClientSocketTTLPool']);
          * 
-         */
+        */
         echo "Parent Start!\n";
         while(true) usleep(100000);
 
@@ -217,7 +217,16 @@ abstract class EventHttpServer {
         $this->CurrentConnected--;
         echo "Client " . stream_socket_get_name($ClientSocket,true) . " disconnect.\n";
     }
-    private function extraceHttpHeader($RawHeaders) {
+    private function extraceHttpHeader($RawHeader,$ClientSocket) {
+        $SocketName=stream_socket_get_name($ClientSocket,true);
+        $this->ClientData[$SocketName]['RawHeaders'].=str_replace("\r",'',$RawHeader);
+        if(strlen($this->ClientData[$SocketName]['RawHeaders'])>1024) {
+            $this->ClientShutDown($SocketName,false);
+            return false;
+        }
+        if(strpos($this->ClientData[$SocketName]['RawHeaders'],"\n\n")===false) return false;
+        $RawHeaders=explode("\n",$this->ClientData[$SocketName]['RawHeaders']);
+        unset($this->ClientData[$SocketName]['RawHeaders']);
         foreach($RawHeaders as $Index => $RawHeader) {
             $RawHeader=trim($RawHeader);
             if($Index==0) {
@@ -242,6 +251,7 @@ abstract class EventHttpServer {
         $HttpHeaders['cookie']=$Cookies;
         $this->HttpHeaders=$HttpHeaders;
         $this->ParseCookie();
+        return true;
     }
     private function ParseCookie() {
         $SessionName=ini_get('session.name');
@@ -256,18 +266,17 @@ abstract class EventHttpServer {
         if($data !== false && $data != '') {
             if(!$this->CheckExpire($ClientSocket)) return;
             if($this->IsClientInit($ClientSocket)) return;
-            $data=str_replace("\r",'',$data);
-            $this->extraceHttpHeader(explode("\n",$data));
-            $this->ClientInit($ClientSocket);
-            $this->ProcessRequest($BufferEvent,$SocketName);
+            if(!$this->extraceHttpHeader($data,$ClientSocket)) return;
+            if($this->ProcessRequest($BufferEvent,$SocketName))
+                $this->ClientInit($ClientSocket);
         }
     }
-    private function CheckExpire($ClientSocket){
-            $SocketName=stream_socket_get_name($ClientSocket,true);
-            $this->ClientData[$SocketName];
-            if($SocketData['Expire']>time()) return true;
-            $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
-            return false;
+    private function CheckExpire($ClientSocket) {
+        $SocketName=stream_socket_get_name($ClientSocket,true);
+        $this->ClientData[$SocketName];
+        if($this->ClientData[$SocketName]['Expire']>time()) return true;
+        $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
+        return false;
     }
     private function ProcessRequest($BufferEvent,$SocketName) {
         $Request=$this->HttpHeaders['_Request_'];
@@ -279,15 +288,16 @@ abstract class EventHttpServer {
                 if(preg_match('/^\/comet\/?$/i',$Request['File'])) {
                     echo "comet\n";
                     event_buffer_write($BufferEvent,$this->ChunkDataHeader);
-                    return;
+                    return true;
                 }
                 break;
             default:
                 $this->ClientShutDown($SocketName,false);
-                return;
+                return false;
         }
         echo "output file\n";
         $this->OutputFile($BufferEvent,$SocketName);
+        return false;
     }
     private function MimeInfo($File) {
         $Info = pathinfo($File);
@@ -356,6 +366,6 @@ abstract class EventHttpServer {
     }
     public function OnClientBufferError($BufferEvent,$Events,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
-        $this->ClientShutDown($SocketName);
+        $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
     }
 }
