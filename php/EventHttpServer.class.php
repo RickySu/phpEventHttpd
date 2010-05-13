@@ -15,9 +15,6 @@ abstract class EventHttpServer {
         @stream_socket_shutdown($ClientSocket,STREAM_SHUT_RDWR);
         @fclose($ClientSocket);
         switch($Data['Command']) {
-            case 'Alarm':
-                $this->RemoveExpireSocket();
-                break;
             case 'Push':
                 $this->ServerPush($Data['Data']);
                 break;
@@ -52,13 +49,14 @@ abstract class EventHttpServer {
     protected function getClientDataArray() {
         return $this->ClientData;
     }
+    /*
     private function RemoveExpireSocket() {
         while($this->ClientDataHead) {
             $SocketData=$this->ClientData[$this->ClientDataHead];
             if($SocketData['Expire']>time()) break;
             $this->ClientShutDown($this->ClientDataHead);
         }
-    }
+    }*/
     protected function ClientWriteScript($ClientEvent,$Command) {
         $Command="$Command;";
         return event_buffer_write($ClientEvent,sprintf("%x\r\n",strlen($Command))."$Command\r\n");
@@ -119,12 +117,14 @@ abstract class EventHttpServer {
         $pid=pcntl_fork();
         if(!$pid) return;
         //Parent
-        if(!pcntl_signal(SIGALRM,array($this,'SignalFunction'))) die("Signal SIGALRM Error\n");
+        //if(!pcntl_signal(SIGALRM,array($this,'SignalFunction'))) die("Signal SIGALRM Error\n");
         if(!pcntl_signal(SIGTERM,array($this,'SignalFunction'))) die("Signal SIGTERM Error\n");
         if(!pcntl_signal(SIGTRAP,array($this,'SignalFunction'))) die("Signal SIGTRAP Error\n");
         if(!pcntl_signal(SIGCHLD,array($this,'SignalFunction'))) die("Signal SIGCHLD Error\n");
-        if($this->Config['ClientSocketTTL']>0)
+        /*if($this->Config['ClientSocketTTL']>0)
             pcntl_alarm($this->Config['ClientSocketTTLPool']);
+         * 
+         */
         echo "Parent Start!\n";
         while(true) usleep(100000);
 
@@ -164,17 +164,8 @@ abstract class EventHttpServer {
         $this->CurrentConnected++;
         echo "Client " . stream_socket_get_name($ClientSocket,true) . " connected.\n";
         stream_set_blocking($ClientSocket,0);
-        /*
-        $TimeoutEvent=event_new();
-        //event_set($TimeoutEvent,-1,EV_TIMEOUT,array($this,'TimeoutEvent'));
-        echo "Timeout:";
-        print_r($TimeoutEvent);
-        echo event_timer_set($TimeoutEvent,array($this,'TimeoutEvent'));
-        echo event_timer_pending($TimeoutEvent,5000000);
-        echo event_base_set($TimeoutEvent,$this->BaseEvent);
-        echo event_add($TimeoutEvent);
-        */
         $BufferEvent=event_buffer_new($ClientSocket,array($this,'doReceive'),array($this,'WriteFin'),array($this,'OnClientBufferError'),$ClientSocket);
+        event_buffer_timeout_set($BufferEvent,$this->Config['ClientSocketTTL'],$this->Config['ClientSocketTTL']);
         event_buffer_watermark_set($BufferEvent,EV_WRITE,1,1);
         event_buffer_base_set($BufferEvent,$this->BaseEvent);
         event_buffer_enable($BufferEvent,EV_READ|EV_WRITE);
@@ -263,12 +254,20 @@ abstract class EventHttpServer {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $data=event_buffer_read($BufferEvent,4096);
         if($data !== false && $data != '') {
+            if(!$this->CheckExpire($ClientSocket)) return;
             if($this->IsClientInit($ClientSocket)) return;
             $data=str_replace("\r",'',$data);
             $this->extraceHttpHeader(explode("\n",$data));
             $this->ClientInit($ClientSocket);
             $this->ProcessRequest($BufferEvent,$SocketName);
         }
+    }
+    private function CheckExpire($ClientSocket){
+            $SocketName=stream_socket_get_name($ClientSocket,true);
+            $this->ClientData[$SocketName];
+            if($SocketData['Expire']>time()) return true;
+            $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
+            return false;
     }
     private function ProcessRequest($BufferEvent,$SocketName) {
         $Request=$this->HttpHeaders['_Request_'];

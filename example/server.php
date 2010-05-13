@@ -8,5 +8,5 @@ class Server extends EventHttpServer{
             $this->ClientWrite($Client, $Data);
     }
 }
-$Server=new Server();
+$Server=new Server(array('ClientSocketTTL'=>10));
 $Server->Run();
