@@ -6,7 +6,7 @@ abstract class EventHttpServer {
     private $BaseEvent;
     private $ServerEvent,$CommandEvent;
     private $ChunkDataHeader,$InitScriptData,$ChunkDataFin;
-    private $ClientDataHead,$ClientDataTail,$ClientData;
+    private $ClientData;
     private $HttpHeaders;
     public function CommandEvent($FD,$Events) {
         $ClientSocket=@stream_socket_accept($this->CommandSocket);
@@ -20,7 +20,7 @@ abstract class EventHttpServer {
                 break;
             case 'Exit':
                 echo "Start Killall Client Socket!\n";
-                while($this->ClientDataHead) $this->ClientShutDown($this->ClientDataHead);
+                foreach($this->ClientData as $SockName => $Data) $this->ClientShutDown($SockName);
                 echo "Killed all Client Socket!\n";
                 event_base_loopbreak($this->BaseEvent);
                 break;
@@ -84,8 +84,6 @@ abstract class EventHttpServer {
         echo "Server Started.\n";
         $this->MaxConnected=0;
         $this->CurrentConnected=0;
-        $this->ClientDataHead=false;
-        $this->ClientDataTail=false;
     }
     private function SendCommand($Command,$Data=null) {
         $Socket=stream_socket_client('tcp://'.$this->Config['CommandHost'].':'.$this->Config['CommandPort']);
@@ -178,6 +176,7 @@ abstract class EventHttpServer {
     private function ClientQueueAdd($ClientSocket,$Event) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName]=array('Socket'=>$ClientSocket,'Event'=>$Event,'Expire'=>time()+$this->Config['ClientSocketTTL']);
+        /*
         if(!$this->ClientDataHead) {
             $this->ClientDataHead=$SocketName;
             $this->ClientDataTail=$SocketName;
@@ -186,6 +185,8 @@ abstract class EventHttpServer {
         $this->ClientData[$SocketName]['Prev']=$this->ClientDataTail;
         $this->ClientDataTail=$SocketName;
         $this->ClientData[$this->ClientData[$SocketName]['Prev']]['Next']=$SocketName;
+         * 
+         */
     }
     protected function ClientInit($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
@@ -196,11 +197,14 @@ abstract class EventHttpServer {
         return $this->ClientData[$SocketName]['Init'];
     }
     private function ClientQueueRemove($SocketName) {
-        $Data=$this->ClientData[$SocketName];
+        /*
+         * $Data=$this->ClientData[$SocketName];
         if($Data['Prev']) $this->ClientData[$Data['Prev']]['Next']=$Data['Next'];
         if($Data['Next']) $this->ClientData[$Data['Next']]['Prev']=$Data['Prev'];
         if($this->ClientDataTail==$SocketName) $this->ClientDataTail=$Data['Prev'];
         if($this->ClientDataHead==$SocketName) $this->ClientDataHead=$Data['Next'];
+         *
+         */
         unset($this->ClientData[$SocketName]);
     }
     private function ClientShutDown($SocketName,$SendFin=true) {
