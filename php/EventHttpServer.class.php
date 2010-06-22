@@ -1,12 +1,14 @@
 <?php
 if (!extension_loaded('libevent')) dl("libevent.so");
+require_once('messagequeue.class.php');
 abstract class EventHttpServer {
     private $CurrentConnected;
-    private $Config;
+    protected $Config;
     private $BaseEvent;
     private $ServerEvent,$CommandEvent;
     private $ChunkDataHeader,$InitScriptData,$ChunkDataFin;
-    private $ClientData;
+    protected $ClientData;
+    protected $ServerSocket,$CommandSocket;
     private $HttpHeaders;
     public function CommandEvent($FD,$Events) {
         $ClientSocket=@stream_socket_accept($this->CommandSocket);
@@ -16,7 +18,7 @@ abstract class EventHttpServer {
         @fclose($ClientSocket);
         switch($Data['Command']) {
             case 'Push':
-                $this->ServerPush($Data['Data']);
+                $this->ServerPush($Data['Event']);
                 break;
             case 'Exit':
                 echo "Start Killall Client Socket!\n";
@@ -30,21 +32,23 @@ abstract class EventHttpServer {
      *
      * @param mixed $Data
      */
-    protected function ServerPush($Data) {
+    protected function ServerPush($Event) {
 
     }
+    protected function ClientInited($SocketName){}
+    protected function ClientDisconnected($SocketName){}
     /**
      *
      * @param <type> $Client
      * @param <type> $Data
      * @return <type>
      */
-    protected function ClientWrite($Client,$Data) {
+    protected function ClientWrite($SocketName,$Data) {
         $Data=json_encode($Data);
         $Command="EVHttpRecv($Data);";
-        $SocketName=stream_socket_get_name($Client['Socket'],true);
+        //$SocketName=stream_socket_get_name($Client['Socket'],true);
         $this->ClientData[$SocketName]['Fin']=true;
-        return event_buffer_write($Client['Event'],sprintf("%x\r\n",strlen($Command))."$Command\r\n");
+        return event_buffer_write($this->ClientData[$SocketName]['Event'],sprintf("%x\r\n",strlen($Command))."$Command\r\n");
     }
     protected function getClientDataArray() {
         return $this->ClientData;
@@ -65,14 +69,15 @@ abstract class EventHttpServer {
         $DefaultConfig=array(
                 'ServerHost' => '0.0.0.0',
                 'ServerPort' => 8888,
-                'CommandHost'=> '127.0.0.1',
+                'CommandHost'=> '0.0.0.0',
                 'CommandPort'=> 8889,
                 'MaxConnected'=>1000,
                 'ClientSocketTTL'=>60,
-                'ClientSocketTTLPool'=>30,
                 'BaseDir'=>'./web',
+                'ServerName'=>'127.0.0.1:8889'
         );
         $this->Config=array_merge($DefaultConfig,$Config);
+        if($this->Config['BaseDir']{0}!='/') $this->Config['BaseDir']=getcwd ().$this->Config['BaseDir'];
         $this->ChunkDataHeader = "HTTP/1.1 200 OK\r\n"
                 . "Cache-Control: no-cache\r\n"
                 . "Pragma: no-cache\r\n"
@@ -92,11 +97,6 @@ abstract class EventHttpServer {
     }
     public function SignalFunction($Signal) {
         switch($Signal) {
-            case SIGALRM:
-                echo "Alarm!\n";
-                $this->SendCommand('Alarm');
-                pcntl_alarm($this->Config['ClientSocketTTLPool']);
-                break;
             case SIGTERM:
             case SIGTRAP:
                 echo "End!!!\n";
@@ -191,6 +191,7 @@ abstract class EventHttpServer {
     protected function ClientInit($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName]['Init']=true;
+        $this->ClientData[$SocketName]['Cookie']=$this->HttpHeaders['cookie'];
     }
     private function IsClientInit($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
@@ -207,9 +208,11 @@ abstract class EventHttpServer {
          */
         unset($this->ClientData[$SocketName]);
     }
-    private function ClientShutDown($SocketName,$SendFin=true) {
+    protected function ClientShutDown($SocketName,$SendFin=true) {
         $Event=$this->ClientData[$SocketName]['Event'];
         $ClientSocket=$this->ClientData[$SocketName]['Socket'];
+        if($this->IsClientInit($ClientSocket))
+         $this->ClientDisconnected($SocketName);
         event_buffer_free($Event);
         if($SendFin) {
             fwrite($ClientSocket,$this->ChunkDataFin);
@@ -218,7 +221,7 @@ abstract class EventHttpServer {
         $this->ClientQueueRemove($SocketName);
         @stream_socket_shutdown($ClientSocket,STREAM_SHUT_RDWR);
         @fclose($ClientSocket);
-        $this->CurrentConnected--;
+        $this->CurrentConnected--;        
         echo "Client " . stream_socket_get_name($ClientSocket,true) . " disconnect.\n";
     }
     private function extraceHttpHeader($RawHeader,$ClientSocket) {
@@ -259,9 +262,7 @@ abstract class EventHttpServer {
     }
     private function ParseCookie() {
         $SessionName=ini_get('session.name');
-        $_COOKIE=$this->HttpHeaders['cookie'];
-        session_id($this->HttpHeaders['cookie'][$SessionName]);
-        session_start();
+        $this->HttpHeaders['cookie'];        
     }
 // client send request , and server will response data
     public function doReceive($BufferEvent,$ClientSocket) {
@@ -271,8 +272,10 @@ abstract class EventHttpServer {
             if(!$this->CheckExpire($ClientSocket)) return;
             if($this->IsClientInit($ClientSocket)) return;
             if(!$this->extraceHttpHeader($data,$ClientSocket)) return;
-            if($this->ProcessRequest($BufferEvent,$SocketName))
+            if($this->ProcessRequest($BufferEvent,$SocketName)){
                 $this->ClientInit($ClientSocket);
+                $this->ClientInited($SocketName);
+            }
         }
     }
     private function CheckExpire($ClientSocket) {
@@ -283,13 +286,13 @@ abstract class EventHttpServer {
         return false;
     }
     private function ProcessRequest($BufferEvent,$SocketName) {
-        $Request=$this->HttpHeaders['_Request_'];
+        $Request=$this->HttpHeaders['_Request_'];        
         switch($Request['Method']) {
             case 'GET':
             case 'POST':
             case 'PUT':
             case 'DELETE':
-                if(preg_match('/^\/comet\/?$/i',$Request['File'])) {
+                if(preg_match('/^\/comet\/?/i',$Request['File'])) {
                     echo "comet\n";
                     event_buffer_write($BufferEvent,$this->ChunkDataHeader);
                     return true;
@@ -298,14 +301,13 @@ abstract class EventHttpServer {
             default:
                 $this->ClientShutDown($SocketName,false);
                 return false;
-        }
-        echo "output file\n";
+        }        
         $this->OutputFile($BufferEvent,$SocketName);
         return false;
     }
     private function MimeInfo($File) {
-        $Info = pathinfo($File);
-        switch(strtolower($Info['basename'])) {
+        $Info = pathinfo($File);        
+        switch(strtolower($Info['extension'])) {
             case 'html':
             case 'htm':
                 return 'text/html';
@@ -326,20 +328,26 @@ abstract class EventHttpServer {
         }
     }
     public function OutputFile($BufferEvent,$SocketName) {
-        $Request=$this->HttpHeaders['_Request_'];
-        $File=preg_replace('/\.{2,}/','',substr($Request['File'],1));
-        $File=getcwd().'/'.$this->Config['BaseDir']."/$File";
+        $Request=$this->HttpHeaders['_Request_'];        
+        if($Request['File']=='/') $File='index.html';
+        else $File=preg_replace('/\.{2,}/','',substr($Request['File'],1));
+        $File=$this->Config['BaseDir']."/$File";
+        echo "$File\n";
         if(!file_exists($File))
             return $this->Send404Error($BufferEvent,$SocketName);
+        $Date=filemtime($File);
         $Data="HTTP/1.1 200\r\n"
                 ."Content-Type: ".$this->MimeInfo($File)."\r\n"
                 ."Connection: close\r\n"
+                ."Date: ".gmdate('D, j M Y H:i:s',$Date).' GMT'."\r\n"
+                ."Cache-control: max-age=86400\r\n"
                 ."Content-Length: ".filesize($File)."\r\n\r\n";
-        echo $Data;
+        echo $Data;        
         event_buffer_write($BufferEvent,$Data);
         $hFile=fopen($File,'r');
         while(!feof($hFile)) {
             $Data=fread($hFile,4096);
+            echo $Data;
             event_buffer_write($BufferEvent,$Data);
         }
         fclose($hFile);
