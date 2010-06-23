@@ -35,7 +35,7 @@ abstract class EventHttpServer {
      * @param resorec $Socket
      * @param int $Events
      */
-    public function CommandEvent($Socket,$Events) {
+    public function evcb_CommandEvent($Socket,$Events) {
         $ClientSocketForCommand=@stream_socket_accept($this->CommandSocket);
         $Data=unserialize(@fread($ClientSocketForCommand,4096));
         stream_set_blocking($ClientSocketForCommand,0);
@@ -172,7 +172,7 @@ abstract class EventHttpServer {
 
         $this->CommandEvent = event_new();
         event_set($this->CommandEvent, $this->CommandSocket, EV_READ | EV_PERSIST,
-                array($this,'CommandEvent'));
+                array($this,'evcb_CommandEvent'));
         event_base_set($this->CommandEvent,$this->BaseEvent);
         event_add($this->CommandEvent);
         event_base_loop($this->BaseEvent);
@@ -307,7 +307,7 @@ abstract class EventHttpServer {
      * @param resorce $BufferEvent
      * @param resorce $ClientSocket
      */
-    public function doReceive($BufferEvent,$ClientSocket) {
+    public function evcb_doReceive($BufferEvent,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $data=event_buffer_read($BufferEvent,4096);
         if($data !== false && $data != '') {

@@ -4,9 +4,9 @@ class Server extends EventHttpServer{
     protected function ServerPush($Data){
         echo "Push\n";
         $ClientData=$this->getClientDataArray();
-        foreach($ClientData as $Client)
-            $this->ClientWrite($Client, $Data);
+        foreach($ClientData as $SocketName => $Client)
+            $this->ClientWrite($SocketName, $Data);
     }
 }
-$Server=new Server(array('ClientSocketTTL'=>10));
+$Server=new Server();
 $Server->Run();

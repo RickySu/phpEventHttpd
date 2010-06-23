@@ -11,7 +11,7 @@ class EventHttp {
     public function Push($Data) {
         echo 'tcp://'.$this->Config['CommandHost'].':'.$this->Config['CommandPort'];
         $Socket=stream_socket_client('tcp://'.$this->Config['CommandHost'].':'.$this->Config['CommandPort']);
-        fwrite($Socket,serialize(array('Command'=>'Push','Data'=>$Data)));
+        fwrite($Socket,serialize(array('Command'=>'Push','Event'=>$Data)));
         fclose($Socket);
     }
 }
