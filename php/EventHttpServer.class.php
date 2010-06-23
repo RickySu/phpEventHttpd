@@ -1,70 +1,94 @@
 <?php
 if (!extension_loaded('libevent')) dl("libevent.so");
-require_once('messagequeue.class.php');
 abstract class EventHttpServer {
+    /**
+     *
+     * @var resource $ServerSocket comet server socket resource
+     * @var resource $CommandSocket Command Channel socket resource
+     * @var array $Config
+     * @var array $ClientData Client Data
+     */
     private $CurrentConnected;
+    private $BaseEvent,$ServerEvent,$CommandEvent;
+    private $ChunkDataHeader,$ChunkDataFin;
+    private $HttpHeaders;
     protected $Config;
-    private $BaseEvent;
-    private $ServerEvent,$CommandEvent;
-    private $ChunkDataHeader,$InitScriptData,$ChunkDataFin;
     protected $ClientData;
     protected $ServerSocket,$CommandSocket;
-    private $HttpHeaders;
-    public function CommandEvent($FD,$Events) {
-        $ClientSocket=@stream_socket_accept($this->CommandSocket);
-        $Data=unserialize(@fread($ClientSocket,4096));
-        stream_set_blocking($ClientSocket,0);
-        @stream_socket_shutdown($ClientSocket,STREAM_SHUT_RDWR);
-        @fclose($ClientSocket);
+    /**
+     * callback virtual function when receiving event message from web server.
+     * @param string $CustomDefineEvent
+     */
+    protected function ServerPush($CustomDefineEvent) {}
+    /**
+     * callback virtual function when a comet client socket is inited.
+     * @param string $SocketName
+     */
+    protected function ClientInited($SocketName){}
+    /**
+     * callback virtual function when a comet client socket is disconnected.
+     * @param string $SocketName
+     */
+    protected function ClientDisconnected($SocketName){}
+    /**
+     * Command Channel event callback
+     * @param resorec $Socket
+     * @param int $Events
+     */
+    public function CommandEvent($Socket,$Events) {
+        $ClientSocketForCommand=@stream_socket_accept($this->CommandSocket);
+        $Data=unserialize(@fread($ClientSocketForCommand,4096));
+        stream_set_blocking($ClientSocketForCommand,0);
+        @stream_socket_shutdown($ClientSocketForCommand,STREAM_SHUT_RDWR);
+        @fclose($ClientSocketForCommand);
         switch($Data['Command']) {
             case 'Push':
                 $this->ServerPush($Data['Event']);
                 break;
             case 'Exit':
                 echo "Start Killall Client Socket!\n";
-                foreach($this->ClientData as $SockName => $Data) $this->ClientShutDown($SockName);
+                foreach($this->ClientData as $SockName => $Data) {
+                    $this->ClientShutDown($SockName);
+                }
                 echo "Killed all Client Socket!\n";
                 event_base_loopbreak($this->BaseEvent);
                 break;
         }
     }
     /**
-     *
-     * @param mixed $Data
-     */
-    protected function ServerPush($Event) {
-
-    }
-    protected function ClientInited($SocketName){}
-    protected function ClientDisconnected($SocketName){}
-    /**
-     *
-     * @param <type> $Client
-     * @param <type> $Data
-     * @return <type>
+     * Send data to client. using EVHttpRecv().
+     * @param <type> $SocketName
+     * @param mixed $Data Data send to client.
+     * @return boolean
      */
     protected function ClientWrite($SocketName,$Data) {
         $Data=json_encode($Data);
-        $Command="EVHttpRecv($Data);";
-        //$SocketName=stream_socket_get_name($Client['Socket'],true);
+        $Command="EVHttpRecv($Data);";        
         $this->ClientData[$SocketName]['Fin']=true;
         return event_buffer_write($this->ClientData[$SocketName]['Event'],sprintf("%x\r\n",strlen($Command))."$Command\r\n");
     }
+    /**
+     * get ClientData array.
+     * @return array
+     */
     protected function getClientDataArray() {
         return $this->ClientData;
     }
-    /*
-    private function RemoveExpireSocket() {
-        while($this->ClientDataHead) {
-            $SocketData=$this->ClientData[$this->ClientDataHead];
-            if($SocketData['Expire']>time()) break;
-            $this->ClientShutDown($this->ClientDataHead);
-        }
-    }*/
+    /**
+     * Send raw javascript to client.
+     * @param resource $ClientEvent
+     * @param string $Command js code
+     * @return boolean
+     */
     protected function ClientWriteScript($ClientEvent,$Command) {
         $Command="$Command;";
+        $this->ClientData[$SocketName]['Fin']=true;
         return event_buffer_write($ClientEvent,sprintf("%x\r\n",strlen($Command))."$Command\r\n");
     }
+    /**
+     *
+     * @param array $Config
+     */
     public function __construct($Config=array()) {
         $DefaultConfig=array(
                 'ServerHost' => '0.0.0.0',
@@ -106,7 +130,10 @@ abstract class EventHttpServer {
                 die;
         }
     }
-    private function Prepare() {
+    /**
+     * Setup signal and becomes a daemon.
+     */
+    private function preInit() {
         $pid = pcntl_fork();
         if($pid)
             die("Daemon Start with $pid\n");
@@ -114,32 +141,32 @@ abstract class EventHttpServer {
         posix_setsid();
         $pid=pcntl_fork();
         if(!$pid) return;
-        //Parent
-        //if(!pcntl_signal(SIGALRM,array($this,'SignalFunction'))) die("Signal SIGALRM Error\n");
         if(!pcntl_signal(SIGTERM,array($this,'SignalFunction'))) die("Signal SIGTERM Error\n");
         if(!pcntl_signal(SIGTRAP,array($this,'SignalFunction'))) die("Signal SIGTRAP Error\n");
         if(!pcntl_signal(SIGCHLD,array($this,'SignalFunction'))) die("Signal SIGCHLD Error\n");
-        /*if($this->Config['ClientSocketTTL']>0)
-            pcntl_alarm($this->Config['ClientSocketTTLPool']);
-         * 
-        */
         echo "Parent Start!\n";
         while(true) usleep(100000);
 
     }
-    private function Connect() {
+    /**
+     * Initialize Socket
+     */
+    private function Init() {
+        $this->preInit();
         $this->CommandSocket = stream_socket_server('tcp://'.$this->Config['CommandHost'].':'.$this->Config['CommandPort'],$errno,$errstr);
         stream_set_blocking($this->CommandSocket,0); // no blocking
         $this->ServerSocket = stream_socket_server('tcp://'.$this->Config['ServerHost'].':'.$this->Config['ServerPort'],$errno,$errstr);
         stream_set_blocking($this->ServerSocket,0); // no blocking
     }
+    /**
+     * EventHttpServer Main Loop
+     */
     public function Run() {
-        $this->Prepare();
-        $this->Connect();
+        $this->Init();
         $this->BaseEvent = event_base_new();
         $this->ServerEvent = event_new();
         event_set($this->ServerEvent, $this->ServerSocket, EV_READ | EV_PERSIST,
-                array($this,'doAccept'));
+                array($this,'evcb_doAccept'));
         event_base_set($this->ServerEvent,$this->BaseEvent);
         event_add($this->ServerEvent);
 
@@ -154,60 +181,62 @@ abstract class EventHttpServer {
         event_free($this->CommandEvent);
         event_base_free($this->BaseEvent);
     }
-
-// client connect
-    public function doAccept($Socket,$Events) {
+    /**
+     * callback event while receiving client connecting request
+     * @param resorce $Socket
+     * @param int $Events
+     */
+    public function evcb_doAccept($Socket,$Events) {
         $ClientSocket=@stream_socket_accept($this->ServerSocket);
         if($this->CurrentConnected>=$this->Config['MaxConnected']) return;
         $this->CurrentConnected++;
         echo "Client " . stream_socket_get_name($ClientSocket,true) . " connected.\n";
         stream_set_blocking($ClientSocket,0);
-        $BufferEvent=event_buffer_new($ClientSocket,array($this,'doReceive'),array($this,'WriteFin'),array($this,'OnClientBufferError'),$ClientSocket);
+        $BufferEvent=event_buffer_new($ClientSocket,array($this,'evcb_doReceive'),array($this,'evcb_WriteFin'),array($this,'evcb_ClientBufferError'),$ClientSocket);
         event_buffer_timeout_set($BufferEvent,$this->Config['ClientSocketTTL'],$this->Config['ClientSocketTTL']);
         event_buffer_watermark_set($BufferEvent,EV_WRITE,1,1);
         event_buffer_base_set($BufferEvent,$this->BaseEvent);
         event_buffer_enable($BufferEvent,EV_READ|EV_WRITE);
         event_add($BufferEvent);
-        $this->ClientQueueAdd($ClientSocket,$BufferEvent);
+        $this->ClientDataSet($ClientSocket,$BufferEvent);
     }
-    public function TimeoutEvent() {
-        echo "Got Timeout\n";
-    }
-    private function ClientQueueAdd($ClientSocket,$Event) {
+    /**
+     * Setup Client Data
+     */
+    private function ClientDataSet($ClientSocket,$Event) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName]=array('Socket'=>$ClientSocket,'Event'=>$Event,'Expire'=>time()+$this->Config['ClientSocketTTL']);
-        /*
-        if(!$this->ClientDataHead) {
-            $this->ClientDataHead=$SocketName;
-            $this->ClientDataTail=$SocketName;
-            return;
-        }
-        $this->ClientData[$SocketName]['Prev']=$this->ClientDataTail;
-        $this->ClientDataTail=$SocketName;
-        $this->ClientData[$this->ClientData[$SocketName]['Prev']]['Next']=$SocketName;
-         * 
-         */
     }
+    /**
+     * Initialize a comet client socket
+     * @param resorce $ClientSocket
+     */
     protected function ClientInit($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName]['Init']=true;
         $this->ClientData[$SocketName]['Cookie']=$this->HttpHeaders['cookie'];
     }
+    /**
+     * Check Client Socket is inited
+     * @param resorce $ClientSocket
+     * @return boolean return true if ClientSocket is inited.
+     */
     private function IsClientInit($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         return $this->ClientData[$SocketName]['Init'];
     }
-    private function ClientQueueRemove($SocketName) {
-        /*
-         * $Data=$this->ClientData[$SocketName];
-        if($Data['Prev']) $this->ClientData[$Data['Prev']]['Next']=$Data['Next'];
-        if($Data['Next']) $this->ClientData[$Data['Next']]['Prev']=$Data['Prev'];
-        if($this->ClientDataTail==$SocketName) $this->ClientDataTail=$Data['Prev'];
-        if($this->ClientDataHead==$SocketName) $this->ClientDataHead=$Data['Next'];
-         *
-         */
+    /**
+     * remove Client connection data.
+     * @param string $SocketName
+     */
+    private function ClientDataRemove($SocketName) {
         unset($this->ClientData[$SocketName]);
     }
+    /**
+     * shutdown a client socket.
+     * @param string $SocketName
+     * @param boolean $SendFin send EVHttpFin(); js code to client.
+     */
     protected function ClientShutDown($SocketName,$SendFin=true) {
         $Event=$this->ClientData[$SocketName]['Event'];
         $ClientSocket=$this->ClientData[$SocketName]['Socket'];
@@ -218,12 +247,18 @@ abstract class EventHttpServer {
             fwrite($ClientSocket,$this->ChunkDataFin);
             fwrite($ClientSocket,"0\r\n\r\n");
         }
-        $this->ClientQueueRemove($SocketName);
+        $this->ClientDataRemove($SocketName);
         @stream_socket_shutdown($ClientSocket,STREAM_SHUT_RDWR);
         @fclose($ClientSocket);
         $this->CurrentConnected--;        
         echo "Client " . stream_socket_get_name($ClientSocket,true) . " disconnect.\n";
     }
+    /**
+     * parsing http headers
+     * @param string $RawHeader
+     * @param resorce $ClientSocket
+     * @return boolean return true if it is a valid http header.
+     */
     private function extraceHttpHeader($RawHeader,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName]['RawHeaders'].=str_replace("\r",'',$RawHeader);
@@ -260,11 +295,18 @@ abstract class EventHttpServer {
         $this->ParseCookie();
         return true;
     }
+    /**
+     * Parse Cookies.
+     */
     private function ParseCookie() {
         $SessionName=ini_get('session.name');
         $this->HttpHeaders['cookie'];        
     }
-// client send request , and server will response data
+    /**
+     * a buffer event callback when socket status is prepared for reading.
+     * @param resorce $BufferEvent
+     * @param resorce $ClientSocket
+     */
     public function doReceive($BufferEvent,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $data=event_buffer_read($BufferEvent,4096);
@@ -278,6 +320,10 @@ abstract class EventHttpServer {
             }
         }
     }
+    /**
+     * Check client socket is expired and shutwodn socket
+     * @return boolean return true if socket is expire
+     */
     private function CheckExpire($ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientData[$SocketName];
@@ -285,6 +331,12 @@ abstract class EventHttpServer {
         $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
         return false;
     }
+    /**
+     *
+     * @param resource $BufferEvent 
+     * @param string $SocketName
+     * @return boolean return true if this is a comet request.
+     */
     private function ProcessRequest($BufferEvent,$SocketName) {
         $Request=$this->HttpHeaders['_Request_'];        
         switch($Request['Method']) {
@@ -305,6 +357,11 @@ abstract class EventHttpServer {
         $this->OutputFile($BufferEvent,$SocketName);
         return false;
     }
+    /**
+     * get file mime type
+     * @param string $File file path
+     * @return string meme type
+     */
     private function MimeInfo($File) {
         $Info = pathinfo($File);        
         switch(strtolower($Info['extension'])) {
@@ -327,6 +384,11 @@ abstract class EventHttpServer {
                 return 'application/x-shockwave-flash';
         }
     }
+    /**
+     * send static file content to client.
+     * @param resorce $BufferEvent
+     * @param string $SocketName
+     */
     public function OutputFile($BufferEvent,$SocketName) {
         $Request=$this->HttpHeaders['_Request_'];        
         if($Request['File']=='/') $File='index.html';
@@ -347,13 +409,17 @@ abstract class EventHttpServer {
         $hFile=fopen($File,'r');
         while(!feof($hFile)) {
             $Data=fread($hFile,4096);
-            echo $Data;
             event_buffer_write($BufferEvent,$Data);
         }
         fclose($hFile);
         $this->ClientData[$SocketName]['DataFin']=true;
     }
-    public function WriteFin($BufferEvent,$ClientSocket) {
+    /**
+     * a buffer event callback while write buffer is empty.
+     * @param resorce $BufferEvent
+     * @param resorce $ClientSocket
+     */
+    public function evcb_WriteFin($BufferEvent,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         if($this->ClientData[$SocketName]['Fin']) {
             event_buffer_free($BufferEvent);
@@ -366,6 +432,12 @@ abstract class EventHttpServer {
             return;
         }
     }
+    /**
+     * Send 404 error to client.
+     * @param <type> $BufferEvent
+     * @param <type> $SocketName
+     * @return boolean
+     */
     private function Send404Error($BufferEvent,$SocketName) {
         $Message="File not found!";
         $Data="HTTP/1.0 404 Not Found\r\n"
@@ -376,7 +448,13 @@ abstract class EventHttpServer {
         $this->ClientData[$SocketName]['DataFin']=true;
         return true;
     }
-    public function OnClientBufferError($BufferEvent,$Events,$ClientSocket) {
+    /**
+     * event buffer error callback. maybe timeout...
+     * @param resorce $BufferEvent
+     * @param int $Events
+     * @param resorce $ClientSocket
+     */
+    public function evcb_ClientBufferError($BufferEvent,$Events,$ClientSocket) {
         $SocketName=stream_socket_get_name($ClientSocket,true);
         $this->ClientShutDown($SocketName,$this->IsClientInit($ClientSocket));
     }
