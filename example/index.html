@@ -28,7 +28,10 @@
              EVHttp_setRecvCallback(RecvData);
              EVHttpComet('http://localhost:8888/comet');
             });
-
-    });
+        });
+        window.onkeydown = function(e) { //Prevent firefox press ESC 
+          if(e.keyCode === 27)
+            return false;
+        }        
     </script>
 </html>
